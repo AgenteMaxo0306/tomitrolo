@@ -1,0 +1,392 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101522">
+  <title>AR 3D Studio</title>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+      background: #101522;
+      color: white;
+    }
+
+    #camara, #lienzo {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    #camara {
+      object-fit: cover;
+      display: none;
+    }
+
+    #lienzo { pointer-events: none; }
+
+    #pantallaInicio {
+      position: fixed;
+      z-index: 5;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      padding: 25px;
+      text-align: center;
+      background: linear-gradient(145deg, #111827, #263c69);
+    }
+
+    h1 { margin-bottom: 8px; font-size: 30px; }
+    p { color: #d6dbea; line-height: 1.5; max-width: 340px; }
+
+    button, .archivo {
+      border: 0;
+      border-radius: 24px;
+      padding: 13px 18px;
+      font-weight: bold;
+      font-size: 15px;
+      cursor: pointer;
+      background: #55e6c1;
+      color: #10221f;
+    }
+
+    .panel {
+      position: fixed;
+      z-index: 3;
+      left: 12px;
+      right: 12px;
+      bottom: 15px;
+      display: none;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 9px;
+      padding: 12px;
+      border-radius: 18px;
+      background: #101522d9;
+      backdrop-filter: blur(8px);
+    }
+
+    .panel button, .archivo {
+      font-size: 13px;
+      padding: 11px 13px;
+    }
+
+    .secundario {
+      background: white;
+      color: #151923;
+    }
+
+    #estado {
+      position: fixed;
+      z-index: 2;
+      top: 15px;
+      left: 10px;
+      right: 10px;
+      text-align: center;
+      text-shadow: 0 2px 5px black;
+      pointer-events: none;
+    }
+
+    .control {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      font-size: 12px;
+      min-width: 105px;
+    }
+
+    input[type="range"] { width: 115px; }
+
+    input[type="file"] { display: none; }
+
+    #mensaje {
+      color: #ffd9a0;
+      font-size: 13px;
+    }
+  </style>
+</head>
+
+<body>
+  <video id="camara" autoplay playsinline muted></video>
+  <canvas id="lienzo"></canvas>
+
+  <section id="pantallaInicio">
+    <h1>AR 3D Studio</h1>
+    <p>
+      Activá la cámara y observá un modelo 3D flotando
+      sobre la imagen real de tu celular.
+    </p>
+    <button id="iniciar">Activar cámara y ver 3D</button>
+    <p id="mensaje"></p>
+  </section>
+
+  <div id="estado">Experiencia 3D</div>
+
+  <div class="panel" id="panel">
+    <button id="girar">Pausar giro</button>
+
+    <label class="archivo" for="archivo3d">
+      Cargar modelo 3D
+    </label>
+    <input id="archivo3d" type="file" accept=".glb,.gltf">
+
+    <label class="control">
+      Tamaño
+      <input id="tamano" type="range"
+        min="0.3" max="2.5" step="0.1" value="1">
+    </label>
+
+    <label class="control">
+      Altura
+      <input id="altura" type="range"
+        min="-2" max="2" step="0.1" value="0">
+    </label>
+
+    <button class="secundario" id="cerrar">
+      Cerrar cámara
+    </button>
+  </div>
+
+  <script type="module">
+    import * as THREE from
+      "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+
+    import { GLTFLoader } from
+      "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js";
+
+    const video = document.querySelector("#camara");
+    const canvas = document.querySelector("#lienzo");
+    const inicio = document.querySelector("#pantallaInicio");
+    const botonIniciar = document.querySelector("#iniciar");
+    const panel = document.querySelector("#panel");
+    const mensaje = document.querySelector("#mensaje");
+    const estado = document.querySelector("#estado");
+
+    let stream = null;
+    let renderer, escena, camara3D, objeto;
+    let girando = true;
+    let animacion = 0;
+    let ultimoURL = null;
+
+    const loader = new GLTFLoader();
+
+    function crearEscena() {
+      escena = new THREE.Scene();
+
+      camara3D = new THREE.PerspectiveCamera(
+        45, innerWidth / innerHeight, 0.1, 100
+      );
+      camara3D.position.z = 6;
+
+      renderer = new THREE.WebGLRenderer({
+        canvas,
+        alpha: true,
+        antialias: true
+      });
+
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+      escena.add(new THREE.HemisphereLight(0xffffff, 0x536080, 2));
+
+      const luz = new THREE.DirectionalLight(0xffffff, 3);
+      luz.position.set(3, 5, 6);
+      escena.add(luz);
+
+      // Modelo de ejemplo: cubo metálico azul.
+      const geometria = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x258dff,
+        metalness: 0.45,
+        roughness: 0.25
+      });
+
+      const cubo = new THREE.Mesh(geometria, material);
+      const bordes = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geometria),
+        new THREE.LineBasicMaterial({ color: 0xffffff })
+      );
+      cubo.add(bordes);
+
+      colocarObjeto(cubo);
+      animar();
+    }
+
+    function colocarObjeto(nuevo) {
+      if (objeto) {
+        escena.remove(objeto);
+      }
+
+      objeto = nuevo;
+      objeto.position.set(0, 0, 0);
+
+      // Centra el modelo y lo adapta a un tamaño manejable.
+      const caja = new THREE.Box3().setFromObject(objeto);
+      const centro = caja.getCenter(new THREE.Vector3());
+      const dimensiones = caja.getSize(new THREE.Vector3());
+      const mayor = Math.max(
+        dimensiones.x, dimensiones.y, dimensiones.z
+      );
+
+      if (mayor > 0) {
+        objeto.position.sub(centro);
+        objeto.scale.multiplyScalar(1.5 / mayor);
+      }
+
+      escena.add(objeto);
+      objeto.scale.multiplyScalar(
+        Number(document.querySelector("#tamano").value)
+      );
+    }
+
+    function animar() {
+      cancelAnimationFrame(animacion);
+
+      function cuadro() {
+        animacion = requestAnimationFrame(cuadro);
+
+        if (objeto && girando) {
+          objeto.rotation.y += 0.008;
+          objeto.rotation.x += 0.003;
+          objeto.position.y =
+            Number(document.querySelector("#altura").value) +
+            Math.sin(performance.now() * 0.0015) * 0.12;
+        } else if (objeto) {
+          objeto.position.y =
+            Number(document.querySelector("#altura").value);
+        }
+
+        renderer.render(escena, camara3D);
+      }
+
+      cuadro();
+    }
+
+    botonIniciar.addEventListener("click", async () => {
+      mensaje.textContent = "";
+
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("HTTPS_REQUIRED");
+        }
+
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        });
+
+        video.srcObject = stream;
+        await video.play();
+
+        if (!renderer) crearEscena();
+
+        video.style.display = "block";
+        inicio.style.display = "none";
+        panel.style.display = "flex";
+        estado.textContent = "Modelo 3D flotante";
+
+      } catch (error) {
+        mensaje.textContent =
+          error.message === "HTTPS_REQUIRED"
+          ? "Abrí la página mediante HTTPS."
+          : "No se pudo abrir la cámara. Revisá los permisos del navegador.";
+      }
+    });
+
+    document.querySelector("#girar").addEventListener("click", e => {
+      girando = !girando;
+      e.currentTarget.textContent =
+        girando ? "Pausar giro" : "Reanudar giro";
+    });
+
+    document.querySelector("#tamano").addEventListener("input", e => {
+      if (objeto) {
+        const caja = new THREE.Box3().setFromObject(objeto);
+        const dimensiones = caja.getSize(new THREE.Vector3());
+        const mayor = Math.max(
+          dimensiones.x, dimensiones.y, dimensiones.z
+        );
+        // Recalcular a partir del tamaño base.
+        if (mayor > 0) {
+          objeto.scale.setScalar(
+            Number(e.target.value) * 1.5 / mayor
+          );
+        }
+      }
+    });
+
+    document.querySelector("#altura").addEventListener("input", e => {
+      if (objeto && !girando) {
+        objeto.position.y = Number(e.target.value);
+      }
+    });
+
+    document.querySelector("#archivo3d").addEventListener("change", e => {
+      const archivo = e.target.files[0];
+      if (!archivo) return;
+
+      const extension = archivo.name.split(".").pop().toLowerCase();
+
+      if (!["glb", "gltf"].includes(extension)) {
+        alert("Elegí un archivo .glb o .gltf");
+        return;
+      }
+
+      if (extension === "gltf") {
+        alert("Para cargar un .gltf, sus archivos asociados deben estar disponibles por separado. Es más sencillo usar un .glb.");
+      }
+
+      const url = URL.createObjectURL(archivo);
+
+      loader.load(url, gltf => {
+        colocarObjeto(gltf.scene);
+        estado.textContent = archivo.name;
+        if (ultimoURL) URL.revokeObjectURL(ultimoURL);
+        ultimoURL = url;
+      }, undefined, error => {
+        console.error(error);
+        URL.revokeObjectURL(url);
+        alert("No se pudo cargar el modelo. Probá con un archivo .glb válido.");
+      });
+    });
+
+    document.querySelector("#cerrar").addEventListener("click", () => {
+      cancelAnimationFrame(animacion);
+
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+
+      video.srcObject = null;
+      video.style.display = "none";
+      panel.style.display = "none";
+      inicio.style.display = "flex";
+      mensaje.textContent = "";
+    });
+
+    window.addEventListener("resize", () => {
+      if (!renderer) return;
+
+      camara3D.aspect = innerWidth / innerHeight;
+      camara3D.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+  </script>
+</body>
+</html>
